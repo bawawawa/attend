@@ -14,22 +14,33 @@
 # The provider is overridden here rather than edited in devise.rb so that the
 # credentials/devise.rb path stays exactly as it is for every deployment that
 # does have a master key.
-#
-# Ordering: initializers load in filename order and devise.rb sorts before this
-# file, so Devise.omniauth_configs[:hack_club] already exists by the time the line
-# below runs. Assigning the attributes is sufficient because omniauth-oauth2
-# builds its ::OAuth2::Client lazily on first use, which is per-request and long
-# after this file has loaded — nothing has memoized a client yet.
 
-provider = defined?(Devise) ? Devise.omniauth_configs[:hack_club] : nil
-return if provider.nil?
+config = defined?(Devise) ? Devise.omniauth_configs[:hack_club] : nil
+return if config.nil? || !config.respond_to?(:args)
 
 client_id = ENV["HACK_CLUB_CLIENT_ID"].presence
 client_secret = ENV["HACK_CLUB_CLIENT_SECRET"].presence
 
 if client_id && client_secret
-  provider.client_id = client_id
-  provider.client_secret = client_secret
+  # Devise holds the provider as Devise::OmniAuth::Config, whose `args` are the
+  # positional arguments devise.rb passed to `config.omniauth` — here
+  # [client_id, client_secret, { scope: ... }] — and builds the middleware as
+  #
+  #   app.middleware.use config.strategy_class, *config.args
+  #
+  # in its `devise.omniauth` initializer, declared `after: :load_config_initializers`
+  # (see devise/rails.rb). Rewriting args[0] and args[1] here therefore lands
+  # before the middleware is constructed.
+  #
+  # Assigning config.strategy would not survive: devise.omniauth sets
+  # `config.strategy = strategy` from the middleware block, so anything set
+  # before the first request is overwritten by the real strategy instance.
+  #
+  # `args` is attr_reader only, but the array is mutated in place rather than
+  # replaced. `config.options` is a reference to the trailing Hash and is
+  # untouched by this, so the scope stays as devise.rb set it.
+  config.args[0] = client_id
+  config.args[1] = client_secret
 elsif client_id || client_secret
   # Registering only one half produces a redirect that fails at the token
   # exchange instead of at the authorize step, which is a much worse error to
